@@ -1,0 +1,63 @@
+name: "Grainline review"
+description: "AI-assisted review for data pipelines: AI findings, data lint, data proof on fixtures, tests, and a release verdict."
+branding:
+  icon: "check-circle"
+  color: "yellow"
+
+inputs:
+  groq-api-key:
+    description: "Groq API key (store it as a repository secret)."
+    required: false
+  github-token:
+    description: "Token used to read the PR and post the comment."
+    required: false
+    default: ${{ github.token }}
+  model:
+    description: "Groq model name."
+    required: false
+    default: "openai/gpt-oss-120b"
+  models-dir:
+    description: "Folder with SQL models for the data proof."
+    required: false
+    default: "models"
+  fixtures-dir:
+    description: "Folder with fixture CSVs (one table per file)."
+    required: false
+    default: "fixtures"
+  tests-dir:
+    description: "Folder with tests."
+    required: false
+    default: "tests"
+  install-command:
+    description: "Command that installs your project's own dependencies so its tests can run."
+    required: false
+    default: "if [ -f requirements.txt ]; then pip install -r requirements.txt; fi"
+  fail-on-block:
+    description: "Fail the check when the verdict is Blocked (1 to enable)."
+    required: false
+    default: "0"
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+    - name: Install Grainline
+      shell: bash
+      run: pip install -r "${{ github.action_path }}/requirements.txt"
+    - name: Install project dependencies
+      shell: bash
+      run: ${{ inputs.install-command }}
+    - name: Run Grainline
+      shell: bash
+      env:
+        PYTHONPATH: ${{ github.action_path }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GROQ_API_KEY: ${{ inputs.groq-api-key }}
+        REVIEW_MODEL: ${{ inputs.model }}
+        GRAINLINE_MODELS_DIR: ${{ inputs.models-dir }}
+        GRAINLINE_FIXTURES_DIR: ${{ inputs.fixtures-dir }}
+        GRAINLINE_TESTS_DIR: ${{ inputs.tests-dir }}
+        GRAINLINE_FAIL_ON_BLOCK: ${{ inputs.fail-on-block }}
+      run: python -m grainline.cli pr

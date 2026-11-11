@@ -1,149 +1,235 @@
+<div align="center">
+
 # 🌾 Grainline
 
-**An AI-assisted software development lifecycle for data pipelines.** Grainline connects requirements → review → data proof → tests → release readiness inside GitHub, and it is built around one rule:
+### Catch the data bugs that generic AI code reviewers miss, with proof.
 
-> **Only tools and data can block a release. The AI explains, suggests, and drafts; it never decides alone.**
+AI-assisted software delivery for data pipelines: from GitHub issue to release verdict.
 
-Generic AI reviewers mostly read the diff and comment, which makes them noisy, and they miss data bugs such as join fan-out, NULL traps, and dropped rows. Grainline adds deterministic data checks and a **data proof**: it runs the old and new version of a changed SQL model on fixture data and compares the outputs, so a finding about data correctness comes with evidence.
+**[Live demo](https://grainline-ai.streamlit.app)** · **[How it works](#how-it-works)** · **[Quick start](#quick-start)** · **[Benchmark](#benchmark)**
 
-## What it does
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-CI-2088FF?logo=githubactions&logoColor=white)
+![Streamlit](https://img.shields.io/badge/Streamlit-app-FF4B4B?logo=streamlit&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-22_passing-2EA44F)
 
-| Stage | Feature | How |
+</div>
+
+---
+
+## Why Grainline
+
+AI code reviewers are good at reading a diff and commenting. They are much weaker at the bugs that matter most in data work, because those bugs live in the **data**, not in the syntax:
+
+- a join that quietly **double-counts** rows,
+- a `WHERE` clause that turns a `LEFT JOIN` into an **inner join** and drops records,
+- a `NOT IN` that returns **nothing** when a NULL appears.
+
+The query runs, the numbers look believable, and the report is wrong.
+
+Grainline closes that gap. When a pull request changes a SQL model, it **runs the old and the new version on fixture data and compares the results.** If revenue doubles or a customer disappears, the PR comment shows exactly which rows changed. Around that core, it connects the rest of the delivery workflow: requirements, review, tests, and a release verdict.
+
+> **Design rule:** only tools and data can block a release. The AI explains, suggests, and drafts; it never decides on its own.
+
+## See it catch a real bug
+
+A pull request "simplifies" a net-sales model by joining refunds directly instead of aggregating them first. It looks harmless. Grainline runs both versions on the fixtures:
+
+| seller | before (correct) | after (the PR) |
 |---|---|---|
-| Requirements | **Requirements analyzer** | A GitHub issue becomes user stories, Given/When/Then acceptance criteria (AC-1, AC-2, ...), tasks, open questions, and test ideas, posted as a comment |
-| Development | **Code assistant (human-approved)** | Label an issue `grainline-suggest` to get a draft implementation and tests posted for review. Nothing is committed automatically; paths are sanitized |
-| Review | **AI PR reviewer** | Structured, validated findings (file, line, severity, category, suggestion) with a **noise budget** of 5 per PR and no style nitpicks |
-| Review | **Data lint** | Deterministic SQL and pandas rules: LEFT JOIN turned into INNER JOIN by a WHERE filter, COUNT(*) after a join, NOT IN with NULLs, unguarded division, merge without `validate=`, and more |
-| Review | **Data proof** | Old vs new SQL on fixture CSVs: row counts, duplicate grain keys (fan-out), removed columns, NULL-rate jumps, and changed values with examples |
-| Security | **Security and quality** | Secret detection on added lines, SQL-injection and mutable-default rules, Bandit, Ruff, and a docstring check for new public functions |
-| Testing | **Testing assistant** | Runs pytest with coverage, runs the AI's suggested tests in a throwaway sandbox file, and explains failing tests in plain language |
-| Traceability | **Requirement-to-test mapping** | A PR that says `Closes #N` is checked against that issue's acceptance criteria; tests named `test_ac_1_...` count as coverage |
-| Release | **Release readiness** | Deterministic score out of 100 and a verdict: **Ready**, **Needs Review**, or **Blocked**, with blockers listed |
-| Reporting | **Audit history and dashboard** | Every run saves a JSON record; the Streamlit app shows verdicts, scores, findings by source, coverage, and time since a PR was opened |
-| Docs | **Documentation** | A changelog line per PR, and flags for new public functions without docstrings |
+| A | 12,000 | **17,000** |
+| B | 8,000 | **missing** |
+| C | 0 | 0 |
 
-## Architecture
+And reports why:
+
+| Severity | Finding | Source |
+|---|---|---|
+| 🔴 high | `WHERE` filters on the LEFT JOINed table `r`, which drops unmatched rows | data lint |
+| 🟠 medium | `COUNT(*)` after a join counts duplicated rows if the join fans out | data lint |
+| 🟠 medium | Row count changed on fixtures: 3 → 2 | data proof |
+| 🟠 medium | `net_cents` for seller A changed: 12,000 → 17,000 | data proof |
+
+Order 101 has two refunds, so it was counted twice; seller B had no refund, so the `WHERE` clause removed it. You can run this exact example in the **[live demo](https://grainline-ai.streamlit.app)** with one click, no setup needed.
+
+## How it works
 
 ```mermaid
-flowchart TB
-    I[GitHub issue] --> R[Requirements analyzer<br/>stories, AC-1..n, tasks]
-    R -->|label grainline-suggest| C[Code assistant<br/>draft for human approval]
-    P[Pull request: Closes #N] --> A[AI review<br/>validated JSON, noise budget]
-    P --> L[Data lint + secrets + docs check]
-    P --> D[Data proof<br/>old vs new SQL on fixtures]
-    P --> T[pytest + coverage<br/>Bandit + Ruff<br/>suggested tests in a sandbox]
-    R --> X[Traceability<br/>AC ↔ tests]
-    A --> V[Release readiness<br/>Ready / Needs Review / Blocked]
+flowchart LR
+    I[GitHub issue] --> R[Requirements<br/>stories + acceptance criteria]
+    P[Pull request] --> A[AI review]
+    P --> L[Data lint<br/>+ secrets]
+    P --> D[Data proof<br/>old vs new SQL]
+    P --> T[Tests + coverage<br/>Bandit + Ruff]
+    R --> X[Traceability]
+    A --> V{Release verdict}
     L --> V
     D --> V
     T --> V
     X --> V
-    V --> M[One PR comment, updated on each push]
-    V --> J[JSON audit record] --> S[Streamlit dashboard]
+    V --> C[PR comment]
+    V --> H[Dashboard]
 ```
 
-## How the verdict is decided
+1. **Requirements.** Open an issue in plain English. Grainline replies with user stories, numbered Given/When/Then acceptance criteria, tasks, and open questions.
+2. **Review.** On every pull request, an LLM returns structured findings (capped at 5, most severe first), alongside deterministic rules for SQL, pandas, and secrets.
+3. **Data proof.** Changed SQL models are run before and after on fixture CSVs to check duplicate keys, dropped rows, removed columns, NULL rates, and changed values.
+4. **Tests.** pytest runs with coverage, suggested tests run in a throwaway sandbox, and failing tests are explained in plain language. Tests named after acceptance criteria (`test_ac_1_...`) are traced back to the issue.
+5. **Release.** Everything rolls up into a score out of 100 and one verdict: **Ready**, **Needs Review**, or **Blocked**.
 
-| Evidence | Effect |
+One comment on the PR holds it all and updates on every push. Each run is also saved as a JSON record for the dashboard.
+
+## What blocks a release
+
+| Evidence | Result |
 |---|---|
-| Failing tests, a high-severity Bandit issue, a detected secret, or a data-proof block (new duplicate keys, removed columns, a query that no longer runs) | **Blocked** |
-| AI findings, data-lint findings, changed values on fixtures, low coverage, or acceptance criteria without tests | Lower the score and can mark **Needs Review**, but never block on their own |
-| Score of 80 or more with no blockers or open review items | **Ready** |
+| Failing tests, a high-severity Bandit issue, a committed secret, or a data proof showing new duplicate keys, removed columns, or a broken query | ⛔ **Blocked** |
+| AI findings, data-lint warnings, changed values on fixtures, low coverage, or acceptance criteria without tests | 🟠 **Needs Review** |
+| Score of 80 or more, with nothing open | ✅ **Ready** |
 
-Thresholds are set in `grainline.toml`. Set the repository variable `GRAINLINE_FAIL_ON_BLOCK=1` to fail the check when the verdict is Blocked.
+Thresholds live in `grainline.toml`. Set the repository variable `GRAINLINE_FAIL_ON_BLOCK=1` to make the GitHub check fail when a PR is blocked.
 
-## Try it in the browser
+## Features
+
+- **Requirements analyzer:** issues become stories, acceptance criteria, tasks, and test ideas.
+- **Code assistant:** label an issue `grainline-suggest` to get a draft implementation, posted for review and never committed.
+- **AI review:** validated JSON findings with severity, category, line, and a fix; a noise budget keeps comments focused.
+- **Data lint:** LEFT JOIN filtered in WHERE, COUNT(*) after a join, NOT IN with NULLs, unguarded division, pandas merge without `validate=`, deduplication without a key.
+- **Data proof:** before-and-after SQL on fixture data, with examples of every changed value.
+- **Security and quality:** secret detection, SQL-injection and mutable-default rules, Bandit, Ruff, and docstring checks.
+- **Testing assistant:** coverage, sandboxed suggested tests, and plain-language failure explanations.
+- **Traceability:** every acceptance criterion mapped to the tests that cover it.
+- **Release readiness:** a deterministic score and verdict.
+- **Dashboard:** try the reviewer, analyze requirements, run a data proof, and track verdicts over time.
+
+## Quick start
+
+**Run the app locally**
 
 ```bash
+git clone https://github.com/adityakusetti/grainline.git
+cd grainline
 pip install -r requirements.txt
-export GROQ_API_KEY="your-key"          # optional; without it only the deterministic checks run
 streamlit run dashboard/app.py
 ```
 
-| Tab | What you can do |
-|---|---|
-| Overview | What Grainline does, real benchmark numbers, and a one-click data proof demo that works without an API key |
-| Review code | Paste code or a diff, or load a planted-bug example, and see AI and deterministic findings side by side |
-| Requirements | Turn a plain-English request into stories, acceptance criteria, and tasks |
-| Data proof | Compare an old and new SQL model on the example fixtures (a correct and a fan-out version are preloaded) |
-| Release history | Verdicts, scores, and findings from past PR runs |
-
-Deploy on Streamlit Community Cloud with main file `dashboard/app.py` and `GROQ_API_KEY = "your-key"` in Secrets, or with Docker:
+The Overview and Data proof tabs work without any API key. To enable the AI features, set `GROQ_API_KEY`:
 
 ```bash
-docker build -t grainline . && docker run -p 8501:8501 -e GROQ_API_KEY=your-key grainline
+export GROQ_API_KEY="your-key"
 ```
 
-Each browser session is limited to 10 AI calls to protect the API key. The theme lives in `.streamlit/config.toml`, and your profile links are set at the top of `dashboard/app.py`.
+**Or with Docker**
 
-## Set it up on a repository
+```bash
+docker build -t grainline .
+docker run -p 8501:8501 -e GROQ_API_KEY=your-key grainline
+```
 
-1. Add this project to a repository you own, including the hidden `.github/` folder.
-2. Add the secret `GROQ_API_KEY` under **Settings → Secrets and variables → Actions**. `GITHUB_TOKEN` is provided automatically.
-3. Point `grainline.toml` at your SQL models (`models_dir`) and fixture CSVs (`fixtures_dir`). Declare each model's output grain on its first line, for example `-- grain: seller_id`.
-4. Open an issue: Grainline posts requirements. Add the `grainline-suggest` label for a draft implementation.
-5. Open a pull request that says `Closes #<issue>`: Grainline posts one review comment and updates it on every push.
-6. Download the `grainline-records-*` artifacts into `reports/` to populate the dashboard.
+**Try it on any public pull request**
+
+Open the **[live demo](https://grainline-ai.streamlit.app)**, go to **Review a GitHub PR**, and paste a link such as `https://github.com/owner/repo/pull/123`. Grainline fetches the diff and runs the AI review, data lint, and secret checks in the browser.
+
+**Add it to your own repository (one file)**
+
+1. Add your Groq key as a repository secret named `GROQ_API_KEY` (**Settings → Secrets and variables → Actions**).
+2. Create `.github/workflows/grainline.yml`:
+
+```yaml
+name: Grainline
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: adityakusetti/grainline@main
+        with:
+          groq-api-key: ${{ secrets.GROQ_API_KEY }}
+          models-dir: models        # your SQL models
+          fixtures-dir: fixtures    # small CSV samples, one table per file
+```
+
+3. Start each SQL model with its output grain, for example `-- grain: seller_id`, so Grainline can detect duplicate keys.
+4. Open a pull request. Grainline posts one comment and updates it on every push.
+
+For the full workflow, including requirements from issues and draft implementations, copy this repository's `.github/workflows/` folder as well.
 
 ## Benchmark
 
-`eval/benchmark.py` contains 9 planted bugs (code, data, and security) and 2 clean changes, and compares an LLM-only reviewer with Grainline (LLM + deterministic checks).
+`eval/benchmark.py` plants 9 bugs (logic, data, and security) and includes 2 clean changes, then compares an LLM-only reviewer with Grainline.
 
 ```bash
-python -m eval.benchmark --offline     # deterministic layer only
-GROQ_API_KEY=... python -m eval.benchmark
+python -m eval.benchmark --offline        # deterministic checks only
+GROQ_API_KEY=... python -m eval.benchmark # adds the LLM comparison
 ```
 
-| Configuration | Planted bugs caught | False alarms on clean changes |
+| Configuration | Planted bugs caught | False alarms |
 |---|---|---|
-| Deterministic checks only (offline) | 7 / 9 | 0 / 2 |
-| LLM only | _fill in after running_ | _fill in_ |
-| Grainline (LLM + deterministic) | _fill in after running_ | _fill in_ |
+| Deterministic checks only | 7 / 9 | 0 / 2 |
+| LLM only | coming soon | coming soon |
+| Grainline (LLM + deterministic) | coming soon | coming soon |
 
-The deterministic rules were written alongside these cases, so treat the offline number as a sanity check rather than a fair score. A stronger evaluation adds bugs written by someone else and real pull requests.
+The deterministic rules were developed alongside these cases, so the offline result is a sanity check rather than a final score. The next step is a larger benchmark drawn from real pull requests.
 
-## Project layout
+## Tech stack
 
-| Path | Purpose |
+| Area | Tools |
 |---|---|
-| `grainline/pipeline.py` | The connected PR workflow, free of GitHub calls so it can be tested |
-| `grainline/cli.py` | GitHub Actions entry points: `pr` and `issue` |
-| `grainline/review.py` | AI review prompt and noise budget |
-| `grainline/requirements_ai.py` | Requirements analyzer, comment rendering, and the hidden JSON used for traceability |
-| `grainline/codegen.py` | Human-approved draft implementations |
-| `grainline/data_lint.py` | Deterministic SQL, pandas, and Python rules |
-| `grainline/data_proof.py` | Old vs new SQL on fixture data (SQLite) |
-| `grainline/security.py`, `docs_check.py` | Secret detection and docstring checks |
-| `grainline/checks.py`, `testgen.py` | pytest with coverage, Bandit, Ruff, sandboxed suggested tests, failure explanations |
-| `grainline/traceability.py`, `readiness.py` | AC-to-test mapping and the release verdict |
-| `grainline/schemas.py`, `llm.py`, `http.py` | Validated LLM outputs, JSON-only calls, retries with backoff |
-| `dashboard/app.py` | Streamlit app |
-| `eval/benchmark.py` | Planted-bug benchmark |
-| `examples/` | Example SQL models (correct and fan-out versions) and fixture CSVs |
-| `tests/` | 20 unit tests |
+| Core | Python 3.11 |
+| AI | Groq API, JSON-only responses, field-by-field validation |
+| GitHub | REST API, GitHub Actions |
+| Quality | pytest, pytest-cov, Bandit, Ruff |
+| Data proof | SQLite, fixture CSVs |
+| App | Streamlit, pandas, Docker |
 
-## Design decisions
+## Project structure
 
-- **Evidence before opinion.** Blocking requires a tool result or a data proof. AI findings are labeled with their source, so reviewers know what is proven and what is suggested.
-- **Low noise.** At most 5 AI findings per PR, ranked by severity, with style left to Ruff.
-- **Validated outputs.** Every LLM response is parsed as JSON and checked field by field; malformed findings are dropped, and IDs like AC-1 are renumbered so references stay consistent.
-- **Failure handling.** HTTP calls retry with backoff; if the AI is unavailable, the deterministic checks still run and post.
-- **Human in the loop.** Generated code is posted for review and never committed; generated tests run only in a temporary file.
-- **Safe CI.** The workflows use `pull_request`, not `pull_request_target`, so code from forks never runs with secrets.
+```
+grainline/
+├── grainline/          core package
+│   ├── pipeline.py     the connected PR workflow
+│   ├── cli.py          GitHub Actions entry points (pr, issue)
+│   ├── review.py       AI review and noise budget
+│   ├── data_lint.py    SQL, pandas, and Python rules
+│   ├── data_proof.py   old vs new SQL on fixture data
+│   ├── readiness.py    score and verdict
+│   └── ...             requirements, codegen, security, tests, traceability
+├── dashboard/app.py    Streamlit app
+├── eval/benchmark.py   planted-bug benchmark
+├── examples/           sample SQL models and fixture data
+├── tests/              unit tests
+├── action.yml          reusable GitHub Action
+└── .github/workflows/  PR, issue, and benchmark workflows
+```
 
-## Limitations
+## Engineering choices
 
-- The data proof runs SQL on SQLite; warehouse-specific syntax (for example BigQuery or Snowflake functions) needs a compatible fixture engine such as DuckDB.
-- The reviewer sees the diff and the linked requirements, not the whole codebase.
-- The benchmark is small and partly written alongside the rules.
+- **Evidence before opinion.** Every finding is labeled with its source, so reviewers can tell what was proven from what was suggested.
+- **Fail safe.** API calls retry with backoff; if the AI is unavailable, every deterministic check still runs and posts.
+- **Validated AI output.** Responses are parsed as JSON and checked field by field. Anything malformed is dropped, and IDs like AC-1 are renumbered to stay consistent.
+- **Human in the loop.** Generated code and tests are suggestions. Nothing is committed automatically.
+- **Safe CI.** Workflows run on `pull_request`, so code from forks never sees repository secrets.
 
 ## Roadmap
 
-- DuckDB engine for warehouse-style SQL.
-- Go file support.
-- Inline review comments on specific lines.
-- A larger benchmark from real pull requests.
+- [ ] DuckDB engine, for warehouse-style SQL such as BigQuery and Snowflake
+- [ ] Inline comments on the exact changed lines
+- [ ] Go support
+- [ ] A larger benchmark built from real pull requests
 
-## AI use
+## Limitations
 
-Starter code was drafted with AI assistance (Claude), then reviewed, tested, and extended by the author.
+- The data proof uses SQLite, so some warehouse-specific SQL needs the planned DuckDB engine.
+- The reviewer sees the diff and the linked requirements, not the entire codebase.
+
+## Author
+
+**Aditya Sai Kumar Kusetti** · M.S. Data Analytics Engineering, Northeastern University
+[LinkedIn](https://www.linkedin.com/in/kusetti-aditya) · [Portfolio](https://kusettiaditya.me)
