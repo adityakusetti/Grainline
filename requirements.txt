@@ -3,5 +3,6 @@ pytest
 pytest-cov
 bandit
 ruff
-streamlit
+streamlit>=1.40
 pandas
+plotly
