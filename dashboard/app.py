@@ -17,7 +17,7 @@ st.set_page_config(page_title="Grainline: AI-assisted SDLC for data pipelines", 
 
 # Edit these to point at your own profiles
 LINKS = {"GitHub repo": "https://github.com/adityakusetti/grainline",
-         "LinkedIn": "https://www.linkedin.com/in/kusetti-aditya",
+         "LinkedIn": "https://www.linkedin.com/in/adityakusetti",
          "Portfolio": "https://kusettiaditya.me"}
 AUTHOR = "Aditya Sai Kumar Kusetti"
 
@@ -190,7 +190,10 @@ with tab_pr:
                                                  result["proofs"], result["suggested"], result["explanations"],
                                                  result["trace"], result["readiness"])
                     with st.expander("See the PR comment Grainline would post"):
-                        st.markdown(comment)
+                        # GitHub renders <details> blocks; Streamlit shows them as raw tags, so convert for display
+                        preview = (comment.replace("<details><summary>", "**").replace("</summary>", "**\n")
+                                   .replace("</details>", ""))
+                        st.markdown(preview)
                     record = report.to_record(repo, number, reviewable, result["review"], fs, result["tests"],
                                               result["bandit"], result["ruff"], result["proofs"], result["trace"], ready)
                     downloads(comment, record, f"{repo.replace('/', '-')}-{number}")
