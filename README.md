@@ -79,6 +79,10 @@ flowchart LR
 
 One comment on the PR holds it all and updates on every push. Each run is also saved as a JSON record for the dashboard.
 
+## Real-world example: an AI false alarm, handled safely
+
+Grainline reviewed a public dbt Labs pull request ([dbt-labs/jaffle-shop#38](https://github.com/dbt-labs/jaffle-shop/pull/38)) that adds a Postgres version of a `cents_to_dollars` macro. The LLM flagged a possible rounding bug, but it had the logic backwards: the new macro casts before dividing, which avoids the integer-division rounding in the old one. Because the finding came from the AI, Grainline labeled it as a suggestion and returned **Needs Review**, not **Blocked**. A human glances at it and moves on, and the release is never stopped by an AI mistake. The LLM's suggested tests also used dbt functions that don't exist, which is why Grainline runs suggested tests in a sandbox before trusting them.
+
 ## What blocks a release
 
 | Evidence | Result |
@@ -241,4 +245,4 @@ grainline/
 ## Author
 
 **Aditya Sai Kumar Kusetti** · M.S. Data Analytics Engineering, Northeastern University
-[LinkedIn](https://www.linkedin.com/in/kusetti-aditya) · [Portfolio](https://kusettiaditya.me)
+[LinkedIn](https://www.linkedin.com/in/adityakusetti) · [Portfolio](https://kusettiaditya.me)
