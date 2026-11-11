@@ -142,7 +142,3 @@ The deterministic rules were written alongside these cases, so treat the offline
 - Go file support.
 - Inline review comments on specific lines.
 - A larger benchmark from real pull requests.
-
-## AI use
-
-Starter code was drafted with AI assistance (Claude), then reviewed, tested, and extended by the author.
