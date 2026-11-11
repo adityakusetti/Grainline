@@ -28,7 +28,10 @@ def evaluate(findings, tests, bandit, ruff, traceability, cfg):
             blockers.append(f"Possible secret in {f.file}:{f.line}.")
         elif f.source.startswith("data-proof:") and f.severity == "high":
             blockers.append(f"Data proof: {f.message}")
-    det = [f for f in findings if f.source != "ai" and not f.source.startswith(("secrets:", "data-proof:"))]
+        elif f.source in ("privacy:card-number", "privacy:ssn"):
+            blockers.append(f"Possible personal data in {f.file}:{f.line} ({f.source.split(':')[1]}).")
+    det = [f for f in findings if f.source != "ai" and not f.source.startswith(("secrets:", "data-proof:"))
+           and f.source not in ("privacy:card-number", "privacy:ssn")]
     proof_review = [f for f in findings if f.source.startswith("data-proof:") and f.severity != "high"]
     ai = [f for f in findings if f.source == "ai"]
     score -= min(20, 10 * sum(f.severity == "high" for f in ai)) + min(15, 3 * sum(f.severity == "medium" for f in ai))
@@ -41,6 +44,7 @@ def evaluate(findings, tests, bandit, ruff, traceability, cfg):
 
     score = max(0, score)
     needs_review = (score < cfg.ready_score or any(f.severity == "high" for f in ai) or bool(proof_review)
-                    or bool(traceability.get("missing")))
+                    or bool(traceability.get("missing")) or not tests.get("ran")
+                    or any(f.severity == "high" for f in det))
     verdict = "Blocked" if blockers else "Needs Review" if needs_review else "Ready"
     return {"verdict": verdict, "score": score, "blockers": blockers, "notes": notes}

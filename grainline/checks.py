@@ -80,3 +80,15 @@ def run_bandit(paths):
         return {"ran": False, "high": 0, "medium": 0, "low": 0}
     code, out, _ = _run(["bandit", "-q", "-f", "json", *paths])
     return {"ran": False, "high": 0, "medium": 0, "low": 0} if code is None else parse_bandit(out)
+
+
+def run_gofmt(paths):
+    """List Go files that gofmt would reformat (GitHub's Ubuntu runners include Go)."""
+    paths = [p for p in paths if p.endswith(".go")]
+    if not paths:
+        return {"ran": False, "issues": 0}
+    code, out, _ = _run(["gofmt", "-l", *paths])
+    if code is None:
+        return {"ran": False, "issues": 0}
+    files = [l for l in out.splitlines() if l.strip()]
+    return {"ran": True, "issues": len(files), "examples": [f"{f}: not gofmt-formatted" for f in files[:5]]}

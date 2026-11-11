@@ -2,7 +2,7 @@
 from dataclasses import asdict, dataclass, field
 
 SEVERITIES = ("high", "medium", "low")
-CATEGORIES = ("bug", "security", "data", "testing", "performance", "style", "docs")
+CATEGORIES = ("bug", "security", "privacy", "data", "testing", "performance", "style", "docs")
 
 
 @dataclass

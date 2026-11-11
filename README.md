@@ -11,7 +11,7 @@ AI-assisted software delivery for data pipelines: from GitHub issue to release v
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
 ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-CI-2088FF?logo=githubactions&logoColor=white)
 ![Streamlit](https://img.shields.io/badge/Streamlit-app-FF4B4B?logo=streamlit&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-22_passing-2EA44F)
+![Tests](https://img.shields.io/badge/tests-26_passing-2EA44F)
 
 </div>
 
@@ -83,8 +83,8 @@ One comment on the PR holds it all and updates on every push. Each run is also s
 
 | Evidence | Result |
 |---|---|
-| Failing tests, a high-severity Bandit issue, a committed secret, or a data proof showing new duplicate keys, removed columns, or a broken query | ⛔ **Blocked** |
-| AI findings, data-lint warnings, changed values on fixtures, low coverage, or acceptance criteria without tests | 🟠 **Needs Review** |
+| Failing tests, a high-severity Bandit issue, a committed secret, personal data such as a card or Social Security number, or a data proof showing new duplicate keys, removed columns, or a broken query | ⛔ **Blocked** |
+| AI findings, data-lint warnings, suspicious code, phishing-style links, other privacy warnings, changed values on fixtures, low coverage, or acceptance criteria without tests | 🟠 **Needs Review** |
 | Score of 80 or more, with nothing open | ✅ **Ready** |
 
 Thresholds live in `grainline.toml`. Set the repository variable `GRAINLINE_FAIL_ON_BLOCK=1` to make the GitHub check fail when a PR is blocked.
@@ -96,7 +96,11 @@ Thresholds live in `grainline.toml`. Set the repository variable `GRAINLINE_FAIL
 - **AI review:** validated JSON findings with severity, category, line, and a fix; a noise budget keeps comments focused.
 - **Data lint:** LEFT JOIN filtered in WHERE, COUNT(*) after a join, NOT IN with NULLs, unguarded division, pandas merge without `validate=`, deduplication without a key.
 - **Data proof:** before-and-after SQL on fixture data, with examples of every changed value.
-- **Security and quality:** secret detection, SQL-injection and mutable-default rules, Bandit, Ruff, and docstring checks.
+- **Security and quality:** secret detection, SQL-injection and mutable-default rules, Bandit, Ruff, gofmt for Go files, and docstring checks.
+- **Languages:** reviews Python, SQL, and Go changes; security and privacy scans run on every changed text file, including docs, data, and workflows.
+- **Suspicious-code scan:** flags malware-style patterns such as executing decoded payloads, download-and-run scripts, reverse-shell signs, crypto miners, unsafe deserialization, and risky GitHub Actions settings. These are heuristics for a human to check, not an antivirus.
+- **Phishing-link scan:** flags brand look-alike domains, punycode domains, link shorteners, raw-IP links, `@` tricks, risky top-level domains, and login pages over plain http in any changed file, including docs.
+- **Privacy scan:** flags payment card numbers (Luhn-checked), Social Security numbers, personal emails and phone numbers in committed data, personal fields written to logs, and queries that expose personal-data columns.
 - **Testing assistant:** coverage, sandboxed suggested tests, and plain-language failure explanations.
 - **Traceability:** every acceptance criterion mapped to the tests that cover it.
 - **Release readiness:** a deterministic score and verdict.
@@ -163,16 +167,16 @@ For the full workflow, including requirements from issues and draft implementati
 
 ## Benchmark
 
-`eval/benchmark.py` plants 9 bugs (logic, data, and security) and includes 2 clean changes, then compares an LLM-only reviewer with Grainline.
+`eval/benchmark.py` plants 12 bugs (logic, data, security, and privacy) and includes 3 clean changes, then compares an LLM-only reviewer with Grainline.
 
 ```bash
 python -m eval.benchmark --offline        # deterministic checks only
 GROQ_API_KEY=... python -m eval.benchmark # adds the LLM comparison
 ```
 
-| Configuration | Planted bugs caught | False alarms |
+| Configuration | Planted bugs caught | False alarms on clean changes |
 |---|---|---|
-| Deterministic checks only | 7 / 9 | 0 / 2 |
+| Deterministic checks only | 10 / 12 | 0 / 3 |
 | LLM only | coming soon | coming soon |
 | Grainline (LLM + deterministic) | coming soon | coming soon |
 
@@ -199,6 +203,7 @@ grainline/
 │   ├── review.py       AI review and noise budget
 │   ├── data_lint.py    SQL, pandas, and Python rules
 │   ├── data_proof.py   old vs new SQL on fixture data
+│   ├── threats.py      suspicious code, phishing links, privacy
 │   ├── readiness.py    score and verdict
 │   └── ...             requirements, codegen, security, tests, traceability
 ├── dashboard/app.py    Streamlit app

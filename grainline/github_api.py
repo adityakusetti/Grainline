@@ -9,8 +9,23 @@ API = "https://api.github.com"
 
 
 def _h():
-    return {"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}", "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28"}
+    h = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+    if os.environ.get("GITHUB_TOKEN"):          # optional for public repos; raises the rate limit
+        h["Authorization"] = f"Bearer {os.environ['GITHUB_TOKEN']}"
+    return h
+
+
+PR_URL = re.compile(r"github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)")
+
+
+def parse_pr_url(url):
+    """'https://github.com/owner/repo/pull/12' -> ('owner/repo', 12), or None."""
+    m = PR_URL.search(url or "")
+    return (f"{m.group(1)}/{m.group(2)}", int(m.group(3))) if m else None
+
+
+def get_pr(repo, pr):
+    return http.request("GET", f"{API}/repos/{repo}/pulls/{pr}", headers=_h(), retries=2).json()
 
 
 def get_changed_files(repo, pr):

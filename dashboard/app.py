@@ -9,7 +9,7 @@ import streamlit as st
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, ROOT)
-from grainline import config, data_lint, data_proof, docs_check, requirements_ai, review, security  # noqa: E402
+from grainline import config, data_lint, data_proof, docs_check, github_api, pipeline, report, requirements_ai, review, security, threats  # noqa: E402
 from grainline.diffs import code_to_diff, new_text  # noqa: E402
 from grainline.schemas import Review  # noqa: E402
 
@@ -64,6 +64,61 @@ def ai_allowed():
     return True
 
 
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+except ImportError:          # charts fall back to Streamlit's built-ins
+    px = go = None
+
+VERDICT_COLORS = {"Ready": "#2F855A", "Needs Review": "#B7791F", "Blocked": "#C53030"}
+
+
+@st.cache_data(show_spinner=False)
+def cached_query(sql):
+    return data_proof.run_query(sql, FIXTURES)
+
+
+@st.cache_data(show_spinner=False)
+def cached_compare(old_sql, new_sql):
+    return data_proof.compare(old_sql, new_sql, FIXTURES)
+
+
+def score_gauge(score, verdict):
+    """Release score as a gauge, colored by verdict."""
+    if go is None:
+        st.metric("Release score", f"{score}/100", verdict)
+        return
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number", value=score, number={"suffix": " / 100"},
+        title={"text": verdict, "font": {"size": 18, "color": VERDICT_COLORS.get(verdict, "#1F2933")}},
+        gauge={"axis": {"range": [0, 100]}, "bar": {"color": VERDICT_COLORS.get(verdict, "#B7791F")},
+               "steps": [{"range": [0, 60], "color": "#FDECEC"}, {"range": [60, 80], "color": "#FDF3E1"},
+                         {"range": [80, 100], "color": "#E8F5EC"}],
+               "threshold": {"line": {"color": "#1F2933", "width": 3}, "value": CFG.ready_score}}))
+    fig.update_layout(height=230, margin=dict(l=20, r=20, t=50, b=10))
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+
+def bar(series, title, colors=None):
+    """Interactive bar chart with Plotly, or Streamlit's chart if Plotly is missing."""
+    if px is None:
+        st.bar_chart(series)
+        return
+    df_ = series.rename_axis("name").reset_index(name="count")
+    fig = px.bar(df_, x="name", y="count", title=title, color="name",
+                 color_discrete_map=colors or {}, text="count")
+    fig.update_layout(height=320, showlegend=False, margin=dict(l=10, r=10, t=50, b=10), xaxis_title=None, yaxis_title=None)
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+
+def downloads(md_text, record, key):
+    c1, c2 = st.columns(2)
+    c1.download_button(":material/description: Download report (Markdown)", md_text, file_name=f"grainline-{key}.md",
+                       mime="text/markdown", key=f"md-{key}", use_container_width=True)
+    c2.download_button(":material/data_object: Download audit record (JSON)", json.dumps(record, indent=2, default=str),
+                       file_name=f"grainline-{key}.json", mime="application/json", key=f"json-{key}", use_container_width=True)
+
+
 def findings_df(findings):
     return pd.DataFrame([{"severity": f"{ICON[f.severity]} {f.severity}", "category": f.category, "line": f.line,
                           "finding": f.message, "suggestion": f.suggestion,
@@ -80,8 +135,65 @@ with st.sidebar:
     st.markdown("**AI review:** " + ("🟢 connected" if os.environ.get("GROQ_API_KEY") else "⚪ off (deterministic checks still run)"))
     st.caption("Only tools and data can block a release. The AI explains and suggests.")
 
-tab_home, tab_review, tab_req, tab_proof, tab_hist = st.tabs(
-    ["Overview", "Review code", "Requirements", "Data proof", "Release history"])
+tab_home, tab_pr, tab_review, tab_req, tab_proof, tab_hist = st.tabs(
+    [":material/home: Overview", ":material/merge: Review a GitHub PR", ":material/code: Review code",
+     ":material/checklist: Requirements", ":material/science: Data proof", ":material/history: Release history"])
+
+with tab_pr:
+    st.write("Paste a link to any **public** GitHub pull request. Grainline fetches the diff and runs the AI review, "
+             "data lint, and secret checks. Tests and the data proof run when Grainline is installed in the repo itself.")
+    url = st.text_input("Pull request URL", placeholder="https://github.com/owner/repo/pull/123",
+                        help="Any public GitHub pull request. Private repos need Grainline installed as a GitHub Action.")
+    if st.button("Review this PR", type="primary"):
+        parsed = github_api.parse_pr_url(url)
+        if not parsed:
+            st.warning("That doesn't look like a GitHub pull request link.")
+        else:
+            repo, number = parsed
+            try:
+                with st.spinner(f"Fetching {repo} #{number}..."):
+                    pr_info = github_api.get_pr(repo, number)
+                    files = github_api.get_changed_files(repo, number)
+            except Exception as e:
+                files = None
+                st.error(f"Couldn't fetch that PR. Is the repository public? ({e})")
+            if files is not None:
+                st.markdown(f"**[{pr_info.get('title', 'Pull request')}]({url})** · {len(files)} changed file(s)")
+                reviewable = [f for f in files if f["status"] != "removed" and
+                              f["filename"].endswith(CFG.review_extensions + pipeline.THREAT_SCAN_EXT)]
+                if not reviewable:
+                    st.info("No code, data, docs, or workflow changes to review in this PR.")
+                else:
+                    with st.spinner("Reviewing..."):
+                        result = pipeline.run(reviewable, CFG, new_text=lambda p: None, run_tools=False,
+                                              use_ai=ai_allowed())
+                    if result["review"].summary and result["review"].summary != "AI review skipped.":
+                        st.write(result["review"].summary)
+                    fs = result["findings"]
+                    ready = result["readiness"]
+                    g, m = st.columns([1, 2])
+                    with g:
+                        score_gauge(ready["score"], ready["verdict"])
+                    with m:
+                        k1, k2, k3 = st.columns(3)
+                        k1.metric("Files reviewed", len(reviewable))
+                        k2.metric("Findings", len(fs))
+                        k3.metric("High severity", sum(f.severity == "high" for f in fs),
+                                  help="High-severity findings from the AI or deterministic rules.")
+                        st.caption("Partial review: tests and the data proof run when Grainline is installed in the repo, "
+                                   "so this verdict can be Needs Review at best.")
+                    if fs:
+                        st.dataframe(findings_df(fs), hide_index=True, use_container_width=True)
+                    else:
+                        st.success("No issues found.")
+                    comment = report.to_markdown(result["review"], fs, result["tests"], result["bandit"], result["ruff"],
+                                                 result["proofs"], result["suggested"], result["explanations"],
+                                                 result["trace"], result["readiness"])
+                    with st.expander("See the PR comment Grainline would post"):
+                        st.markdown(comment)
+                    record = report.to_record(repo, number, reviewable, result["review"], fs, result["tests"],
+                                              result["bandit"], result["ruff"], result["proofs"], result["trace"], ready)
+                    downloads(comment, record, f"{repo.replace('/', '-')}-{number}")
 
 with tab_home:
     st.markdown("""
@@ -91,8 +203,8 @@ with tab_home:
       <p>Grainline turns GitHub issues into acceptance criteria, reviews pull requests, runs the old and new SQL on
       fixture data to prove data bugs, and gives every release a verdict: Ready, Needs Review, or Blocked.</p>
     </div>""", unsafe_allow_html=True)
-    stats = [("10", "connected SDLC stages"), ("7 / 9", "planted bugs caught offline"),
-             ("0", "false alarms on clean changes"), ("20", "unit tests")]
+    stats = [("10", "connected SDLC stages"), ("10 / 12", "planted bugs caught offline"),
+             ("0", "false alarms on clean changes"), ("26", "unit tests")]
     for col, (num, label) in zip(st.columns(4), stats):
         col.markdown(f'<div class="gl-stat"><b>{num}</b><span>{label}</span></div>', unsafe_allow_html=True)
     st.caption("Offline numbers use the deterministic checks only, on a small benchmark written with the rules.")
@@ -102,8 +214,8 @@ with tab_home:
     if st.button("▶ Run the data proof demo", type="primary"):
         good = open(os.path.join(EX_DIR, "models", "net_sales.sql")).read()
         bad = open(os.path.join(EX_DIR, "models", "net_sales_buggy.sql")).read()
-        proof = data_proof.compare(good, bad, FIXTURES)
-        o, n = data_proof.run_query(good, FIXTURES), data_proof.run_query(bad, FIXTURES)
+        proof = cached_compare(good, bad)
+        o, n = cached_query(good), cached_query(bad)
         a, b = st.columns(2)
         a.markdown("**Before (correct)**")
         a.dataframe(pd.DataFrame(o[1]), hide_index=True, use_container_width=True)
@@ -117,7 +229,7 @@ with tab_home:
 
     st.subheader("How it works")
     steps = [("01", "Requirements", "An issue becomes user stories and Given/When/Then acceptance criteria."),
-             ("02", "Review", "AI findings with a noise budget, plus deterministic SQL, pandas, and secret checks."),
+             ("02", "Review", "AI findings with a noise budget, plus SQL, pandas, security, phishing, and privacy checks."),
              ("03", "Data proof", "Old vs new SQL on fixture data: duplicates, dropped rows, changed values."),
              ("04", "Tests", "pytest with coverage, AI-suggested tests in a sandbox, and traceability to each criterion."),
              ("05", "Release", "A score out of 100 and a verdict. Only tools and data can block.")]
@@ -128,7 +240,7 @@ with tab_home:
     st.subheader("What makes it different")
     diffs = [("Evidence before opinion", "Blocking needs a tool result or a data proof; AI findings are labeled as suggestions."),
              ("Built for data code", "Catches join fan-out, NULL traps, dropped rows, and unguarded division in SQL and pandas."),
-             ("Low noise", "At most 5 AI findings per PR, ranked, with style left to the linter."),
+             ("Security and privacy", "Flags malware-style code, phishing links, secrets, and personal data like card or SSN numbers."),
              ("Human in the loop", "Draft code and tests are posted for review and never committed automatically.")]
     cols = st.columns(4)
     for col, (title, text) in zip(cols, diffs):
@@ -141,15 +253,22 @@ with tab_review:
     examples = {"(paste your own)": ("", "my_change.py")}
     from eval.benchmark import CASES
     examples.update({c["name"].replace("_", " "): (c["patch"], c["file"]) for c in CASES})
-    choice = st.selectbox("Example", list(examples), key="ex")
-    filename = st.text_input("File name", value=examples[choice][1])
-    text = st.text_area("Python or SQL code, or a diff", value=examples[choice][0], height=240)
+    names = list(examples)
+    if hasattr(st, "pills"):
+        choice = st.pills("Load an example", names, default=names[0], key="ex",
+                          help="Each example contains one planted bug, except the clean ones.") or names[0]
+    else:
+        choice = st.selectbox("Load an example", names, key="ex")
+    filename = st.text_input("File name", value=examples[choice][1],
+                             help="The extension decides which rules run: .sql for SQL rules, .py for pandas and Python rules.")
+    text = st.text_area("Python or SQL code, or a diff", value=examples[choice][0], height=240,
+                        help="Plain code is treated as a newly added file. A unified diff is reviewed as a change.")
     if st.button("Review", type="primary"):
         if not text.strip() or len(text) > MAX_CHARS:
             st.warning(f"Paste between 1 and {MAX_CHARS:,} characters.")
         else:
             patch = code_to_diff(text)
-            det = data_lint.lint(filename, patch) + security.scan(filename, patch) + \
+            det = data_lint.lint(filename, patch) + security.scan(filename, patch) + threats.scan(filename, patch) + \
                 docs_check.missing_docstrings(filename, new_text(patch), patch)
             rv = review.review_diff([{"filename": filename, "status": "modified", "patch": patch}], CFG.model,
                                     CFG.max_ai_findings) if ai_allowed() else Review(summary="")
@@ -165,7 +284,7 @@ with tab_review:
 
 with tab_req:
     st.write("Turn a plain-English request into user stories, acceptance criteria, tasks, and open questions.")
-    title = st.text_input("Title", value="Net sales report by seller")
+    title = st.text_input("Title", value="Net sales report by seller", help="Like a GitHub issue title.")
     body = st.text_area("Request", height=160, value="Finance needs monthly net sales per seller: completed orders "
                         "minus refunds. Sellers with fully refunded orders should still appear.")
     if st.button("Analyze requirements", type="primary"):
@@ -179,14 +298,16 @@ with tab_proof:
     good = open(os.path.join(EX_DIR, "models", "net_sales.sql")).read()
     bad = open(os.path.join(EX_DIR, "models", "net_sales_buggy.sql")).read()
     c1, c2 = st.columns(2)
-    old_sql = c1.text_area("Old SQL", value=good, height=300)
-    new_sql = c2.text_area("New SQL", value=bad, height=300)
+    old_sql = c1.text_area("Old SQL", value=good, height=300, help="The model before the pull request.")
+    new_sql = c2.text_area("New SQL", value=bad, height=300,
+                           help="The model after the pull request. Declare the grain, for example `-- grain: seller_id`, "
+                                "so duplicate keys can be detected.")
     with st.expander("Fixture tables"):
         for p in sorted(glob.glob(os.path.join(FIXTURES, "*.csv"))):
             st.caption(os.path.basename(p))
             st.dataframe(pd.read_csv(p), hide_index=True)
     if st.button("Run data proof", type="primary"):
-        proof = data_proof.compare(old_sql, new_sql, FIXTURES)
+        proof = cached_compare(old_sql, new_sql)
         st.metric("Result", proof["status"].upper())
         st.dataframe(pd.DataFrame([{k: (json.dumps(v) if isinstance(v, (list, dict)) else v) for k, v in c.items()}
                                    for c in proof["checks"]]), hide_index=True, use_container_width=True)
@@ -194,7 +315,7 @@ with tab_proof:
         if fs:
             st.dataframe(findings_df(fs), hide_index=True, use_container_width=True)
         try:
-            o, n = data_proof.run_query(old_sql, FIXTURES), data_proof.run_query(new_sql, FIXTURES)
+            o, n = cached_query(old_sql), cached_query(new_sql)
             a, b = st.columns(2)
             a.caption("Old output")
             a.dataframe(pd.DataFrame(o[1]), hide_index=True)
@@ -220,11 +341,15 @@ with tab_hist:
         k2.metric("Ready", int((df.verdict == "Ready").sum()))
         k3.metric("Blocked", int((df.verdict == "Blocked").sum()))
         k4.metric("Average score", round(df.score.mean(), 1))
-        st.subheader("Verdicts")
-        st.bar_chart(df.verdict.value_counts())
+        bar(df.verdict.value_counts(), "Verdicts", VERDICT_COLORS)
         allf = pd.DataFrame([dict(f, pr=r["pr"]) for r in recs for f in r["findings"]])
         if len(allf):
-            st.subheader("Findings by source")
-            st.bar_chart(allf.source.str.split(":").str[0].value_counts())
+            bar(allf.source.str.split(":").str[0].value_counts(), "Findings by source")
+            if px is not None and len(df) > 1:
+                fig = px.line(df.sort_values("reviewed_at"), x="reviewed_at", y="score", markers=True,
+                              title="Release score over time", hover_data=["pr", "verdict"])
+                fig.add_hline(y=CFG.ready_score, line_dash="dash", annotation_text="Ready threshold")
+                fig.update_layout(height=320, margin=dict(l=10, r=10, t=50, b=10), xaxis_title=None, yaxis_title=None)
+                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
         st.subheader("Pull requests")
         st.dataframe(df, hide_index=True, use_container_width=True)

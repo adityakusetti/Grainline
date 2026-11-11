@@ -1,7 +1,7 @@
 [grainline]
 model = "openai/gpt-oss-120b"
 max_ai_findings = 5          # noise budget per PR
-review_extensions = [".py", ".sql"]
+review_extensions = [".py", ".sql", ".go"]
 models_dir = "examples/models"     # SQL models checked by the data proof
 fixtures_dir = "examples/fixtures" # CSVs loaded as tables
 tests_dir = "tests"

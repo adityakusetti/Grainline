@@ -2,9 +2,13 @@
 review (AI + data lint + secrets + docs) -> data proof -> tests and scanners -> traceability -> release readiness."""
 import os
 
-from . import checks, data_lint, data_proof, docs_check, review, security, testgen, traceability
+from . import checks, data_lint, data_proof, docs_check, review, security, testgen, threats, traceability
 from .readiness import evaluate
 from .schemas import Review
+
+
+THREAT_SCAN_EXT = (".py", ".sql", ".go", ".sh", ".yml", ".yaml", ".json", ".jsonl", ".csv", ".tsv", ".txt", ".md", ".toml",
+                   ".cfg", ".ini", ".js", ".ts", ".html", ".ipynb", "Dockerfile")
 
 
 def requirements_context(req):
@@ -16,6 +20,7 @@ def requirements_context(req):
 def run(files, cfg, old_text=lambda path: None, new_text=None, req=None, run_tools=True, use_ai=True):
     """files: [{filename, status, patch}]. old_text(path) returns the base version of a file (or None)."""
     new_text = new_text or (lambda p: open(p).read() if os.path.exists(p) else None)
+    scanned = [f for f in files if f["status"] != "removed" and f["filename"].endswith(THREAT_SCAN_EXT)]
     files = [f for f in files if f["filename"].endswith(cfg.review_extensions) and f["status"] != "removed"]
 
     ai_review = review.review_diff(files, cfg.model, cfg.max_ai_findings, requirements_context(req)) if use_ai \
@@ -33,10 +38,18 @@ def run(files, cfg, old_text=lambda path: None, new_text=None, req=None, run_too
             proofs[path] = proof
             findings += data_proof.to_findings(path, proof)
 
+    # malware-style code, phishing-style links, and privacy leaks: every changed text file, including data and workflows
+    for f in scanned:
+        findings += threats.scan(f["filename"], f["patch"])
+
     paths = [f["filename"] for f in files if os.path.exists(f["filename"])]
     if run_tools:
         tests = checks.run_pytest(cfg.tests_dir)
         bandit, ruff = checks.run_bandit(paths), checks.run_ruff(paths)
+        gofmt = checks.run_gofmt(paths)
+        if gofmt.get("ran"):                       # Go formatting issues count as lint issues
+            ruff = dict(ruff, ran=True, issues=ruff.get("issues", 0) + gofmt["issues"],
+                        examples=ruff.get("examples", []) + gofmt.get("examples", []))
         suggested = testgen.run_suggested(ai_review.suggested_tests) if use_ai else {"ran": False}
         explanations = testgen.explain_failures(tests.get("failing", []), tests.get("summary", ""), cfg.model) if use_ai else []
     else:
