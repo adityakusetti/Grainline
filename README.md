@@ -62,6 +62,7 @@ streamlit run dashboard/app.py
 
 | Tab | What you can do |
 |---|---|
+| Overview | What Grainline does, real benchmark numbers, and a one-click data proof demo that works without an API key |
 | Review code | Paste code or a diff, or load a planted-bug example, and see AI and deterministic findings side by side |
 | Requirements | Turn a plain-English request into stories, acceptance criteria, and tasks |
 | Data proof | Compare an old and new SQL model on the example fixtures (a correct and a fan-out version are preloaded) |
@@ -73,7 +74,7 @@ Deploy on Streamlit Community Cloud with main file `dashboard/app.py` and `GROQ_
 docker build -t grainline . && docker run -p 8501:8501 -e GROQ_API_KEY=your-key grainline
 ```
 
-Each browser session is limited to 10 AI calls to protect the API key.
+Each browser session is limited to 10 AI calls to protect the API key. The theme lives in `.streamlit/config.toml`, and your profile links are set at the top of `dashboard/app.py`.
 
 ## Set it up on a repository
 
@@ -142,3 +143,7 @@ The deterministic rules were written alongside these cases, so treat the offline
 - Go file support.
 - Inline review comments on specific lines.
 - A larger benchmark from real pull requests.
+
+## AI use
+
+Starter code was drafted with AI assistance (Claude), then reviewed, tested, and extended by the author.
