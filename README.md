@@ -174,11 +174,15 @@ python -m eval.benchmark --offline        # deterministic checks only
 GROQ_API_KEY=... python -m eval.benchmark # adds the LLM comparison
 ```
 
-| Configuration | Planted bugs caught | False alarms on clean changes |
-|---|---|---|
-| Deterministic checks only | 10 / 12 | 0 / 3 |
-| LLM only | coming soon | coming soon |
-| Grainline (LLM + deterministic) | coming soon | coming soon |
+| Configuration | Planted bugs caught | Detection rate | False alarms on clean changes | False-positive rate |
+|---|---|---|---|---|
+| Deterministic checks only | 30 / 36 | 83% | 0 / 9 | 0% |
+| LLM only | 27 / 36 | 75% | 3 / 9 | 33% |
+| **Grainline (LLM + deterministic)** | **34 / 36** | **94%** | 3 / 9 | 33% |
+
+Run with `openai/gpt-oss-120b` over 3 runs of 12 planted bugs and 3 clean changes; counts are summed across runs. Reproduce it from the **Actions** tab with the *Grainline benchmark* workflow.
+
+**What this shows:** combining the two layers catches more bugs than either alone (94% vs 75% for the LLM alone). Every false alarm came from the LLM, and because AI findings can only mark a change *Needs Review*, never *Blocked*, none of them would have blocked a release. That is the reason for Grainline's design rule.
 
 The deterministic rules were developed alongside these cases, so the offline result is a sanity check rather than a final score. The next step is a larger benchmark drawn from real pull requests.
 
