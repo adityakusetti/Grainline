@@ -203,11 +203,12 @@ with tab_home:
       <p>Grainline turns GitHub issues into acceptance criteria, reviews pull requests, runs the old and new SQL on
       fixture data to prove data bugs, and gives every release a verdict: Ready, Needs Review, or Blocked.</p>
     </div>""", unsafe_allow_html=True)
-    stats = [("10", "connected SDLC stages"), ("10 / 12", "planted bugs caught offline"),
-             ("0", "false alarms on clean changes"), ("26", "unit tests")]
+    stats = [("10", "connected SDLC stages"), ("94%", "planted bugs caught (AI + rules)"),
+             ("0", "false alarms from the rules"), ("26", "unit tests")]
     for col, (num, label) in zip(st.columns(4), stats):
         col.markdown(f'<div class="gl-stat"><b>{num}</b><span>{label}</span></div>', unsafe_allow_html=True)
-    st.caption("Offline numbers use the deterministic checks only, on a small benchmark written with the rules.")
+    st.caption("Benchmark: 12 planted bugs and 3 clean changes, 3 runs with openai/gpt-oss-120b. The LLM alone caught 75% "
+               "with 33% false alarms; those AI alarms only ask for review and can never block a release.")
 
     st.subheader("Try it in one click")
     st.write("A pull request changes a net-sales model to join refunds directly. Grainline runs both versions on fixture data:")
