@@ -1,8 +1,0 @@
-requests
-pytest
-pytest-cov
-bandit
-ruff
-streamlit>=1.40
-pandas
-plotly

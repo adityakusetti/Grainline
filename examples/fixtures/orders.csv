@@ -1,7 +1,0 @@
-order_id,seller_id,order_date,status,gross_cents
-101,A,2026-06-02,completed,10000
-102,A,2026-06-10,completed,5000
-103,B,2026-06-15,completed,8000
-104,B,2026-06-20,cancelled,4000
-105,B,2026-07-01,completed,7000
-106,C,2026-06-30,completed,3000
